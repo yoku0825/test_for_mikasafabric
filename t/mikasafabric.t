@@ -42,7 +42,7 @@ for (my $n= 1; $n <= 3; $n++)
     is($fabric->lookup_servers($server)->[2], "SECONDARY", "$server->{host_port} get to be SECONDARY");
     $fabric->promote($server);
 
-    is($fabric->lookup_servers($server)->[2], "PRIMARY", "$server->{host_port} has been promoted");
+    is($fabric->lookup_master, $server->{uuid}, "$server->{host_port} has been promoted");
     $master->{is_master}= 0 if $master;
     $server->{is_master}= 1;
     $master= $server;
@@ -63,9 +63,20 @@ subtest "writing master" => sub
   ok(healthcheck(@servers), "Not broken yet");
   ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
 
-
+  $master->{conn}->do("INSERT INTO d1.t1 VALUES (2, 'two')");
+  done_testing;
 };
 
+subtest "promote" => sub
+{
+  $master->{conn}->do("INSERT INTO d1.t1 VALUES (3, 'three')");
+  $fabric->promote;
+
+  ok(healthcheck($fabric, @servers), "Not broken yet");
+  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+
+
+};
 
 
 
@@ -133,6 +144,7 @@ sub new
   {
     group => $group,
     conn => $conn,
+    _servers => [],
   };
   bless $self => $class;
 
@@ -184,6 +196,8 @@ sub add
 {
   my ($self, $server)= @_;
   my $sql= sprintf("CALL group.add('%s', '%s')", $self->{group}, $server->{host_port});
+  push(@{$self->{_servers}}, $server);
+
   return $self->_query($sql);
 }
 
@@ -198,7 +212,18 @@ sub promote
 {
   my ($self, $server)= @_;
   my $arg= $server ? sprintf("'%s', '%s'", $self->{group}, $server->{uuid}) : $self->{group};
-  return $self->_query("CALL group.promote($arg)");
+  $self->_query("CALL group.promote($arg)");
+  return $self->lookup_master;
+}
+
+sub lookup_master
+{
+  my ($self)= @_;
+  foreach (@{$self->lookup_servers})
+  {
+    return $_->[0] if $_->[2] eq "PRIMARY";
+  }
+  return undef;
 }
 
 sub _query
