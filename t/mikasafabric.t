@@ -74,6 +74,7 @@ subtest "promote" => sub
 
   ok(healthcheck($fabric, @servers), "Not broken yet");
   ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  done_testing;
 };
 
 system("systemctl restart mysqlrouter");
@@ -87,21 +88,88 @@ subtest "write master via router" => sub
   $router_write->{conn}->do("INSERT INTO d1.t1 VALUES (4, 'four')");
   ok(healthcheck($fabric, @servers), "Not broken yet");
   ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  done_testing;
 };
 
 subtest "server faulty" => sub
 {
   ### old-master, maybe slave.
+  $master->{conn}->do("SET GLOBAL offline_mode= 1");
+  @servers= remove_server($master, @servers);
+  sleep 5;
+  ok(healthcheck($fabric, @servers), "Not broken yet");
+  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+
+  my @ret= sort(map { $_->[2] } @{$fabric->lookup_servers});
+  is_deeply(\@ret, ["FAULTY", "PRIMARY", "SECONDARY"], "Status is correct");
+
+  $router_write->{conn}->do("INSERT INTO d1.t1 VALUES (5, 'five')");
+
+  foreach (1..10)
+  {
+    ok(0, "Server is not devided") 
+      if $router_read->get_uuid eq $master->{uuid};
+  }
+  ok(healthcheck($fabric, @servers), "Not broken yet");
+  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+
+  done_testing;
+};
+
+subtest "server makes alive" => sub
+{
+  $master->{conn}->do("SET GLOBAL offline_mode= 0");
+  push(@servers, $master);
+  $router_write->{conn}->do("INSERT INTO d1.t1 VALUES (6, 'six')");
+  ok(healthcheck($fabric, @servers), "Not broken yet");
+  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  $fabric->set_status($master, "SPARE");
+  is($fabric->lookup_servers($master)->[2], "SPARE", "old-master returns SPARE");
+
+  $router_write->{conn}->do("INSERT INTO d1.t1 VALUES (7, 'seven')");
+
+  foreach (1..10)
+  {
+    ok(0, "Server is not devided") 
+      if $router_read->get_uuid eq $master->{uuid};
+  }
+ 
+  $fabric->set_status($master, "SECONDARY");
+  is($fabric->lookup_servers($master)->[2], "SECONDARY", "old-master returns SECONDARY");
+
+  my $ok= 0;
+  foreach (1..10)
+  {
+    $ok= 1 if $router_read->get_uuid eq $master->{uuid};
+  }
+  ok($ok, "SECONDARY Server is back to round-robin routing");
+
+  $fabric->promote($master);
+  is($fabric->lookup_servers($master)->[2], "PRIMARY", "old-master returns PRIMARY");
+  $router_write->{conn}->do("INSERT INTO d1.t1 VALUES (8, 'eight')");
+  is($router_write->get_uuid, $master->{uuid}, "Router back to point to master");
+
+  ok(healthcheck($fabric, @servers), "Not broken yet");
+  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  done_testing;
+};
+
+subtest "dead migration" => sub
+{
   $master->{conn}->do("SHUTDOWN");
   @servers= remove_server($master, @servers);
   sleep 5;
-  $DB::single= 1;
   ok(healthcheck($fabric, @servers), "Not broken yet");
   ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  my @ret= sort(map { $_->[2] } @{$fabric->lookup_servers});
+  is_deeply(\@ret, ["FAULTY", "PRIMARY", "SECONDARY"], "Status is correct");
 };
 
-
 done_testing;
+
+
+
+
 
 
 sub healthcheck
@@ -164,7 +232,7 @@ sub new
   {
     eval
     {
-      $conn= DBI->connect($dsn, "admin", "", { RaiseError => 1, PrintError => 0 });
+      $conn= DBI->connect($dsn, "admin", "", { RaiseError => 1, PrintError => 0, mysql_auto_reconnect => 1 });
     };
     last if !($@);
     sleep 1;
@@ -292,7 +360,7 @@ sub new
   {
     eval
     {
-      $conn= DBI->connect($dsn, "root", "", { RaiseError => 1, PrintError => 0 });
+      $conn= DBI->connect($dsn, "root", "", { RaiseError => 1, PrintError => 0, mysql_auto_reconnect => 1 });
     };
     last if !($@);
     sleep 1;
@@ -305,12 +373,20 @@ sub new
     conn => $conn,
     docker_id => $id,
     host_port => "$host:$port",
-    uuid => $conn->selectall_arrayref("SHOW VARIABLES LIKE 'server_uuid'")->[0]->[1],
     is_master => 0,
   };
   bless $self => $class;
+  $self->{uuid}= $self->get_uuid;
 
   return $self;
+}
+
+sub get_uuid
+{
+  my ($self)= @_;
+  my $dsn= sprintf("dbi:mysql:;host=%s;port=%d", $self->{host}, $self->{port});
+  my $conn= DBI->connect($dsn, "root", "", { RaiseError => 1, PrintError => 0, mysql_auto_reconnect => 1 });
+  return $conn->selectrow_arrayref("SHOW VARIABLES LIKE 'server_uuid'")->[1];
 }
 
 sub healthcheck
