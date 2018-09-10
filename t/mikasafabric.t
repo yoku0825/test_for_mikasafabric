@@ -8,6 +8,7 @@ use Ytkit::HealthCheck;
 use Test::More;
 use Data::Dumper;
 use JSON;
+use Carp::Always;
 
 system("mikasafabric manage stop");
 system("mikasafabric manage teardown");
@@ -55,25 +56,25 @@ ok(healthcheck($fabric, @servers), "mikasafabric cluster startup");
 
 subtest "writing master" => sub
 {
-  $master->{conn}->do("CREATE DATABASE d1");
-  $master->{conn}->do("CREATE TABLE d1.t1 (num serial, val varchar(32))");
-  $master->{conn}->do("INSERT INTO d1.t1 VALUES (1, 'one')");
+  $master->get_conn->do("CREATE DATABASE ap");
+  $master->get_conn->do("CREATE TABLE ap.t1 (num serial, val varchar(32))");
+  $master->get_conn->do("INSERT INTO ap.t1 VALUES (1, 'one')");
   sleep 1;
 
   ok(healthcheck(@servers), "Not broken yet");
-  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
 
-  $master->{conn}->do("INSERT INTO d1.t1 VALUES (2, 'two')");
+  $master->get_conn->do("INSERT INTO ap.t1 VALUES (2, 'two')");
   done_testing;
 };
 
 subtest "promote" => sub
 {
-  $master->{conn}->do("INSERT INTO d1.t1 VALUES (3, 'three')");
+  $master->get_conn->do("INSERT INTO ap.t1 VALUES (3, 'three')");
   $fabric->promote;
 
   ok(healthcheck($fabric, @servers), "Not broken yet");
-  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
   done_testing;
 };
 
@@ -83,27 +84,27 @@ my $router_read = Server->new(undef, "127.0.0.1", 23306);
 
 subtest "write master via router" => sub
 {
-  is($router_write->{conn}->selectrow_arrayref("SHOW VARIABLES LIKE 'server_uuid'")->[1],
+  is($router_write->get_conn->selectrow_arrayref("SHOW VARIABLES LIKE 'server_uuid'")->[1],
      $fabric->lookup_master, "Router points to master");
-  $router_write->{conn}->do("INSERT INTO d1.t1 VALUES (4, 'four')");
+  $router_write->get_conn->do("INSERT INTO ap.t1 VALUES (4, 'four')");
   ok(healthcheck($fabric, @servers), "Not broken yet");
-  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
   done_testing;
 };
 
 subtest "server faulty" => sub
 {
   ### old-master, maybe slave.
-  $master->{conn}->do("SET GLOBAL offline_mode= 1");
+  $master->use_root->do("SET GLOBAL offline_mode= 1");
   @servers= remove_server($master, @servers);
   sleep 5;
   ok(healthcheck($fabric, @servers), "Not broken yet");
-  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
 
   my @ret= sort(map { $_->[2] } @{$fabric->lookup_servers});
   is_deeply(\@ret, ["FAULTY", "PRIMARY", "SECONDARY"], "Status is correct");
 
-  $router_write->{conn}->do("INSERT INTO d1.t1 VALUES (5, 'five')");
+  $router_write->get_conn->do("INSERT INTO ap.t1 VALUES (5, 'five')");
 
   foreach (1..10)
   {
@@ -111,22 +112,22 @@ subtest "server faulty" => sub
       if $router_read->get_uuid eq $master->{uuid};
   }
   ok(healthcheck($fabric, @servers), "Not broken yet");
-  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
 
   done_testing;
 };
 
 subtest "server makes alive" => sub
 {
-  $master->{conn}->do("SET GLOBAL offline_mode= 0");
+  $master->use_root->do("SET GLOBAL offline_mode= 0");
   push(@servers, $master);
-  $router_write->{conn}->do("INSERT INTO d1.t1 VALUES (6, 'six')");
+  $router_write->get_conn->do("INSERT INTO ap.t1 VALUES (6, 'six')");
   ok(healthcheck($fabric, @servers), "Not broken yet");
-  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
   $fabric->set_status($master, "SPARE");
   is($fabric->lookup_servers($master)->[2], "SPARE", "old-master returns SPARE");
 
-  $router_write->{conn}->do("INSERT INTO d1.t1 VALUES (7, 'seven')");
+  $router_write->get_conn->do("INSERT INTO ap.t1 VALUES (7, 'seven')");
 
   foreach (1..10)
   {
@@ -137,30 +138,35 @@ subtest "server makes alive" => sub
   $fabric->set_status($master, "SECONDARY");
   is($fabric->lookup_servers($master)->[2], "SECONDARY", "old-master returns SECONDARY");
 
-  my $ok= 0;
-  foreach (1..10)
+  TODO:
   {
-    $ok= 1 if $router_read->get_uuid eq $master->{uuid};
+    local $TODO= "MySQL Router's bug...(at least, 2.0.4)";
+    my $ok= 0;
+    foreach (1..10)
+    {
+      $ok= 1 if $router_read->get_uuid eq $master->{uuid};
+    }
+    ok($ok, "SECONDARY Server is back to round-robin routing");
   }
-  ok($ok, "SECONDARY Server is back to round-robin routing");
 
   $fabric->promote($master);
   is($fabric->lookup_servers($master)->[2], "PRIMARY", "old-master returns PRIMARY");
-  $router_write->{conn}->do("INSERT INTO d1.t1 VALUES (8, 'eight')");
+  sleep 3;
+  $router_write->get_conn->do("INSERT INTO ap.t1 VALUES (8, 'eight')");
   is($router_write->get_uuid, $master->{uuid}, "Router back to point to master");
 
   ok(healthcheck($fabric, @servers), "Not broken yet");
-  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
   done_testing;
 };
-
+$DB::single= 1;
 subtest "dead migration" => sub
 {
-  $master->{conn}->do("SHUTDOWN");
+  $master->use_root->do("SHUTDOWN");
   @servers= remove_server($master, @servers);
   sleep 5;
   ok(healthcheck($fabric, @servers), "Not broken yet");
-  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+  ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
   my @ret= sort(map { $_->[2] } @{$fabric->lookup_servers});
   is_deeply(\@ret, ["FAULTY", "PRIMARY", "SECONDARY"], "Status is correct");
 };
@@ -190,7 +196,7 @@ sub is_synced
   my ($sql, @servers)= @_;
   my $ng= 0;
 
-  my @ret= map { Dumper($_->{conn}->selectall_arrayref($sql)) } @servers;
+  my @ret= map { Dumper($_->get_conn->selectall_arrayref($sql)) } @servers;
 
   for (my $n= 0; $n <= $#ret; $n++)
   {
@@ -220,6 +226,7 @@ use warnings;
 use utf8;
 use DBI;
 use Carp;
+use Data::Dumper;
 use Ytkit::HealthCheck;
 
 sub new
@@ -338,6 +345,7 @@ sub _query
     $rs= $stmt->fetchall_arrayref;
   };
   carp($@) if $@;
+  carp(Dumper($rs)) if $ENV{VERBOSE};
   return $rs;
 }
 
@@ -360,7 +368,7 @@ sub new
   {
     eval
     {
-      $conn= DBI->connect($dsn, "root", "", { RaiseError => 1, PrintError => 0, mysql_auto_reconnect => 1 });
+      $conn= DBI->connect($dsn, "ap", "", { RaiseError => 1, PrintError => 0, mysql_auto_reconnect => 1 });
     };
     last if !($@);
     sleep 1;
@@ -370,7 +378,6 @@ sub new
   {
     host => $host,
     port => $port,
-    conn => $conn,
     docker_id => $id,
     host_port => "$host:$port",
     is_master => 0,
@@ -381,12 +388,26 @@ sub new
   return $self;
 }
 
-sub get_uuid
+sub get_conn
 {
   my ($self)= @_;
   my $dsn= sprintf("dbi:mysql:;host=%s;port=%d", $self->{host}, $self->{port});
-  my $conn= DBI->connect($dsn, "root", "", { RaiseError => 1, PrintError => 0, mysql_auto_reconnect => 1 });
-  return $conn->selectrow_arrayref("SHOW VARIABLES LIKE 'server_uuid'")->[1];
+  return DBI->connect($dsn, "ap", "", { RaiseError => 1, PrintError => 0, mysql_auto_reconnect => 1 });
+}
+
+sub use_root
+{
+  my ($self)= @_;
+  my $dsn= sprintf("dbi:mysql:;host=%s;port=%d", $self->{host}, $self->{port});
+  return DBI->connect($dsn, "root", "", { RaiseError => 1, PrintError => 0, mysql_auto_reconnect => 1 });
+}
+
+
+
+sub get_uuid
+{
+  my ($self)= @_;
+  return $self->get_conn->selectrow_arrayref("SHOW VARIABLES LIKE 'server_uuid'")->[1];
 }
 
 sub healthcheck
