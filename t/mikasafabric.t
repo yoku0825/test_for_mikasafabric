@@ -74,10 +74,31 @@ subtest "promote" => sub
 
   ok(healthcheck($fabric, @servers), "Not broken yet");
   ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
-
-
 };
 
+system("systemctl restart mysqlrouter");
+my $router_write= Server->new(undef, "127.0.0.1", 13306);
+my $router_read = Server->new(undef, "127.0.0.1", 23306);
+
+subtest "write master via router" => sub
+{
+  is($router_write->{conn}->selectrow_arrayref("SHOW VARIABLES LIKE 'server_uuid'")->[1],
+     $fabric->lookup_master, "Router points to master");
+  $router_write->{conn}->do("INSERT INTO d1.t1 VALUES (4, 'four')");
+  ok(healthcheck($fabric, @servers), "Not broken yet");
+  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+};
+
+subtest "server faulty" => sub
+{
+  ### old-master, maybe slave.
+  $master->{conn}->do("SHUTDOWN");
+  @servers= remove_server($master, @servers);
+  sleep 5;
+  $DB::single= 1;
+  ok(healthcheck($fabric, @servers), "Not broken yet");
+  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+};
 
 
 done_testing;
@@ -113,7 +134,16 @@ sub is_synced
   return !($ng);
 }
 
+sub remove_server
+{
+  my ($server, @servers)= @_;
 
+  for (my $n= 0; $n <= $#servers; $n++)
+  {
+    delete($servers[$n]) if $server->{uuid} eq $servers[$n]->{uuid};
+  }
+  return @servers;
+}
 
 package Fabric;
 
@@ -156,8 +186,7 @@ sub new
 sub healthcheck
 {
   my ($self)= @_;
-  $self->{_health} //= Ytkit::HealthCheck->new("--host=127.0.0.1", "--port=32275", "--role=fabric");
-  return $self->{_health}->{status}->{str};
+  return Ytkit::HealthCheck->new("--host=127.0.0.1", "--port=32275", "--role=fabric")->{status}->{str};
 }
 
 sub lookup_groups
@@ -287,15 +316,15 @@ sub new
 sub healthcheck
 {
   my ($self)= @_;
-  $self->{_health} //= Ytkit::HealthCheck->new("--host", $self->{host},
-                                               "--port", $self->{port},
-                                               "--role=auto");
-  return $self->{_health}->{status}->{str};
+  return Ytkit::HealthCheck->new("--host", $self->{host},
+                                 "--port", $self->{port},
+                                 "--role=auto")->{status}->{str};
 }
 
 sub DESTROY
 {
   my ($self)= @_;
+  return if !($self->{docker_id});
   my $id= $self->{docker_id};
   system("docker stop $id");
   system("docker rm $id");
