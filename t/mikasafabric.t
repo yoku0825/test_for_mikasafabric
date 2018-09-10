@@ -49,6 +49,8 @@ for (my $n= 1; $n <= 3; $n++)
   }
 }
 
+print Dumper @servers;
+print Dumper $master;
 
 
 
@@ -204,3 +206,10 @@ sub new
   return $self;
 }
 
+sub DESTROY
+{
+  my ($self)= @_;
+  my $id= $self->{docker_id};
+  system("docker stop $id");
+  system("docker rm $id");
+}
