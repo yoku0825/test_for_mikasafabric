@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use utf8;
 
+use Ytkit::HealthCheck;
 use Test::More;
 use Data::Dumper;
 use JSON;
@@ -49,14 +50,57 @@ for (my $n= 1; $n <= 3; $n++)
   }
 }
 
-print Dumper @servers;
-print Dumper $master;
+ok(healthcheck($fabric, @servers), "mikasafabric cluster startup");
 
+
+subtest "writing master" => sub
+{
+  $master->{conn}->do("CREATE DATABASE d1");
+  $master->{conn}->do("CREATE TABLE d1.t1 (num serial, val varchar(32))");
+  $master->{conn}->do("INSERT INTO d1.t1 VALUES (1, 'one')");
+  sleep 1;
+
+  ok(healthcheck(@servers), "Not broken yet");
+  ok(is_synced("SELECT * FROM d1.t1", @servers), "Data is synced");
+
+
+};
 
 
 
 
 done_testing;
+
+
+sub healthcheck
+{
+  my (@servers)= @_;
+  my $ng= 0;
+
+  foreach (@servers)
+  {
+    $ng= 1 if $_->healthcheck ne "OK";
+  }
+
+  return !($ng);
+}
+
+sub is_synced
+{
+  my ($sql, @servers)= @_;
+  my $ng= 0;
+
+  my @ret= map { Dumper($_->{conn}->selectall_arrayref($sql)) } @servers;
+
+  for (my $n= 0; $n <= $#ret; $n++)
+  {
+    for (my $m= $n + 1; $m <= $#ret; $m++)
+    {
+      $ng= 1 if $ret[$n] ne $ret[$m]
+    }
+  }
+  return !($ng);
+}
 
 
 
@@ -67,6 +111,7 @@ use warnings;
 use utf8;
 use DBI;
 use Carp;
+use Ytkit::HealthCheck;
 
 sub new
 {
@@ -94,6 +139,13 @@ sub new
   $self->_query("CALL group.create('$group')");
 
   return $self;
+}
+
+sub healthcheck
+{
+  my ($self)= @_;
+  $self->{_health} //= Ytkit::HealthCheck->new("--host=127.0.0.1", "--port=32275", "--role=fabric");
+  return $self->{_health}->{status}->{str};
 }
 
 sub lookup_groups
@@ -173,6 +225,7 @@ use strict;
 use warnings;
 use utf8;
 use DBI;
+use Ytkit::HealthCheck;
 
 sub new
 {
@@ -204,6 +257,15 @@ sub new
   bless $self => $class;
 
   return $self;
+}
+
+sub healthcheck
+{
+  my ($self)= @_;
+  $self->{_health} //= Ytkit::HealthCheck->new("--host", $self->{host},
+                                               "--port", $self->{port},
+                                               "--role=auto");
+  return $self->{_health}->{status}->{str};
 }
 
 sub DESTROY
