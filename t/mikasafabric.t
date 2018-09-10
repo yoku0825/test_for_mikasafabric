@@ -42,8 +42,8 @@ for (my $n= 1; $n <= 3; $n++)
     $fabric->promote($server);
 
     is($fabric->lookup_servers($server)->[2], "PRIMARY", "$server->{host_port} has been promoted");
-    $master->{is_master}= false if $master;
-    $server->{is_master}= true;
+    $master->{is_master}= 0 if $master;
+    $server->{is_master}= 1;
     $master= $server;
     done_testing;
   }
@@ -197,7 +197,7 @@ sub new
     docker_id => $id,
     host_port => "$host:$port",
     uuid => $conn->selectall_arrayref("SHOW VARIABLES LIKE 'server_uuid'")->[0]->[1],
-    is_master => false,
+    is_master => 0,
   };
   bless $self => $class;
 
