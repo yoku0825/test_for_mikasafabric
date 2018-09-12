@@ -8,6 +8,11 @@ use Carp;
 use Data::Dumper;
 use Ytkit::HealthCheck;
 
+my $fabric_ttl= 1;
+my $ttl_sleep = $fabric_ttl * 3 + 1;
+my $fd_time   = 4;
+my $fd_sleep  = $fd_time * 2 + $ttl_sleep;
+
 sub new
 {
   my ($class, $group)= @_;
@@ -72,6 +77,7 @@ sub lookup_servers
 sub create_group
 {
   my ($self, $group)= @_;
+  sleep $ttl_sleep;
   return $self->_query("CALL group.create('$group')");
 }
 
@@ -80,6 +86,7 @@ sub add
   my ($self, $server)= @_;
   my $sql= sprintf("CALL group.add('%s', '%s')", $self->{group}, $server->{host_port});
   push(@{$self->{_servers}}, $server);
+  sleep $ttl_sleep;
 
   return $self->_query($sql);
 }
@@ -88,6 +95,7 @@ sub set_status
 {
   my ($self, $server, $status)= @_;
   my $sql= sprintf("CALL server.set_status('%s', '%s')", $server->{host_port}, $status);
+  sleep $ttl_sleep;
   return $self->_query($sql);
 }
 
@@ -96,6 +104,7 @@ sub promote
   my ($self, $server)= @_;
   my $arg= $server ? sprintf("'%s', '%s'", $self->{group}, $server->{uuid}) : $self->{group};
   $self->_query("CALL group.promote($arg)");
+  sleep $ttl_sleep;
   return $self->lookup_master;
 }
 
@@ -107,6 +116,12 @@ sub lookup_master
     return $_->[0] if $_->[2] eq "PRIMARY";
   }
   return undef;
+}
+
+sub wait_fd
+{
+  my ($self)= @_;
+  sleep $fd_sleep;
 }
 
 sub _query

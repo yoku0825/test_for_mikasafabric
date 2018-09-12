@@ -21,6 +21,7 @@ system("mikasafabric manage setup");
 system("mikasafabric manage start --daemonize");
 
 my $group_name= "myfabric";
+
 my $fabric= Fabric->new($group_name);
 ok($fabric, "Startup mikasafabric");
 
@@ -97,12 +98,40 @@ subtest "write master via router" => sub
   done_testing;
 };
 
+subtest "read slave via router" => sub
+{
+  my $uuid;
+  foreach (1..10)
+  {
+    $uuid->{$router_read->get_uuid}= 1;
+  }
+  is(scalar(keys(%$uuid)), 2, "Round-robbined 2 servers(non-allow_primary_read");
+  $uuid= {};
+
+  $fabric->set_status($master, "SPARE");
+
+  foreach (1..10)
+  {
+    ok(0, "Server is not devided") 
+      if $router_read->get_uuid eq $master->{uuid};
+  }
+ 
+  $fabric->set_status($master, "SECONDARY");
+  foreach (1..10)
+  {
+    $uuid->{$router_read->get_uuid}= 1;
+  }
+  is(scalar(keys(%$uuid)), 2, "Round-robbined 2 servers(non-allow_primary_read");
+
+  done_testing;
+};
+ 
 subtest "server faulty" => sub
 {
   ### old-master, maybe slave.
   $master->use_root->do("SET GLOBAL offline_mode= 1");
   @servers= remove_server($master, @servers);
-  sleep 5;
+  $fabric->wait_fd;
   ok(healthcheck($fabric, @servers), "Not broken yet");
   ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
 
@@ -143,20 +172,15 @@ subtest "server makes alive" => sub
   $fabric->set_status($master, "SECONDARY");
   is($fabric->lookup_servers($master)->[2], "SECONDARY", "old-master returns SECONDARY");
 
-  TODO:
+  my $ok= 0;
+  foreach (1..10)
   {
-    local $TODO= "MySQL Router's bug...(at least, 2.0.4)";
-    my $ok= 0;
-    foreach (1..10)
-    {
-      $ok= 1 if $router_read->get_uuid eq $master->{uuid};
-    }
-    ok($ok, "SECONDARY Server is back to round-robin routing");
+    $ok= 1 if $router_read->get_uuid eq $master->{uuid};
   }
+  ok($ok, "SECONDARY Server is back to round-robin routing");
 
   $fabric->promote($master);
   is($fabric->lookup_servers($master)->[2], "PRIMARY", "old-master returns PRIMARY");
-  sleep 3;
   $router_write->get_conn->do("INSERT INTO ap.t1 VALUES (8, 'eight')");
   is($router_write->get_uuid, $master->{uuid}, "Router back to point to master");
 
@@ -164,12 +188,12 @@ subtest "server makes alive" => sub
   ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
   done_testing;
 };
-$DB::single= 1;
+
 subtest "dead migration" => sub
 {
   $master->use_root->do("SHUTDOWN");
   @servers= remove_server($master, @servers);
-  sleep 5;
+  $fabric->wait_fd;
   ok(healthcheck($fabric, @servers), "Not broken yet");
   ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
   my @ret= sort(map { $_->[2] } @{$fabric->lookup_servers});
