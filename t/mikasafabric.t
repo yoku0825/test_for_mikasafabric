@@ -217,6 +217,28 @@ foreach (1..3)
       ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
       my @ret= sort(map { $_->[2] } @{$fabric->lookup_servers});
       is_deeply(\@ret, ["FAULTY", "PRIMARY", "SECONDARY"], "Status is correct");
+      done_testing;
+    };
+    my $saved_master_uuid= $router_write->get_uuid;
+    my $saved_slave_uuid= $router_read->get_uuid;
+
+    subtest "routing should be cached during mikasafabric is down" => sub
+    {
+      system("mikasafabric manage stop");
+
+      my $master_ok= my $slave_ok= 1;
+      foreach (1..$max_router_retry)
+      {
+        $master_ok++ if $router_read->get_uuid eq $saved_master_uuid;
+        sleep $router_sleep;
+        $slave_ok++ if $router_read->get_uuid eq $saved_slave_uuid;
+        sleep $router_sleep;
+      }
+      is($master_ok, $max_router_retry, "Write-routing during fabric-downed");
+      is($master_ok, $max_router_retry, "Read-routing during fabric-downed");
+
+      system("mikasafabric manage start --daemonize");
+      done_testing;
     };
   };
 }
