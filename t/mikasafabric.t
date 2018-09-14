@@ -226,10 +226,10 @@ foreach (1..3)
     {
       system("mikasafabric manage stop");
 
-      my $master_ok= my $slave_ok= 1;
+      my $master_ok= my $slave_ok= 0;
       foreach (1..$max_router_retry)
       {
-        $master_ok++ if $router_read->get_uuid eq $saved_master_uuid;
+        $master_ok++ if $router_write->get_uuid eq $saved_master_uuid;
         sleep $router_sleep;
         $slave_ok++ if $router_read->get_uuid eq $saved_slave_uuid;
         sleep $router_sleep;
