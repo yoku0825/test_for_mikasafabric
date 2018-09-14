@@ -16,8 +16,8 @@ use JSON;
 use Carp::Always;
 
 my $group_name= "myfabric";
-my $max_router_retry= 20;
-my $router_sleep= 3;
+my $max_router_retry= 10;
+my $router_sleep= 1;
 
 ### Run 3 times, because facing mysqlrouter's restart problem.
 foreach (1..3)
