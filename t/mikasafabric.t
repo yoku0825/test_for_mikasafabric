@@ -9,18 +9,19 @@ use lib "$Bin/../lib";
 use Fabric;
 use Server;
 
-
 use Test::More;
+use Test::More::Color qw{foreground};
 use Data::Dumper;
 use JSON;
 use Carp::Always;
+use Time::HiRes;
 
 my $group_name= "myfabric";
 my $max_router_retry= 10;
 my $router_sleep= 1;
 
 ### Run 3 times, because facing mysqlrouter's restart problem.
-foreach (1..3)
+foreach (1..1)
 {
   subtest "test round no. $_" => sub
   {
@@ -91,6 +92,7 @@ foreach (1..3)
       done_testing;
     };
     
+    ### Startup mysqlrouter
     system("systemctl restart mysqlrouter");
     sleep 5;
     my $router_write= Server->new(undef, "127.0.0.1", 13306);
@@ -98,8 +100,7 @@ foreach (1..3)
     
     subtest "write master via router" => sub
     {
-      is($router_write->get_conn->selectrow_arrayref("SHOW VARIABLES LIKE 'server_uuid'")->[1],
-         $fabric->lookup_master, "Router points to master");
+      is($router_write->get_uuid, $fabric->lookup_master, "Router points to master");
       $router_write->get_conn->do("INSERT INTO ap.t1 VALUES (4, 'four')");
       ok(healthcheck($fabric, @servers), "Not broken yet");
       ok(is_synced("SELECT * FROM ap.t1", @servers), "Data is synced");
@@ -112,7 +113,6 @@ foreach (1..3)
       foreach (1..$max_router_retry)
       {
         $uuid->{$router_read->get_uuid}= 1;
-        sleep $router_sleep;
       }
       my $uuid_str= Dumper($uuid);
       is(scalar(keys(%$uuid)), 2, "Round-robbined 2 servers(non-allow_primary_read) $uuid_str");
@@ -222,9 +222,45 @@ foreach (1..3)
     my $saved_master_uuid= $router_write->get_uuid;
     my $saved_slave_uuid= $router_read->get_uuid;
 
+    subtest "ttl handling" => sub
+    {
+      my $start= my $stop= my $elapsed= 0;
+      is($router_write->get_uuid, $saved_master_uuid, "Master UUID before promote");
+      $fabric->promote;
+      $start= Time::HiRes::time();
+      is($fabric->lookup_master, $saved_slave_uuid, "Fabric promoted");
+
+      while ()
+      {
+        last if $router_write->get_uuid eq $saved_slave_uuid;
+        Time::HiRes::sleep(0.2);
+      }
+      my $end  = Time::HiRes::time();
+      $elapsed = $end - $start;
+      ok(0 < $elapsed && $elapsed < 1, "Cache refresh time 1sec");
+
+      system("mikasafabric manage set_ttl 10");
+      sleep(3);
+      is($router_write->get_uuid, $saved_slave_uuid, "Master UUID after promote");
+      $fabric->promote;
+      $start= Time::HiRes::time();
+      while ()
+      {
+        last if $router_write->get_uuid eq $saved_master_uuid;
+        Time::HiRes::sleep(0.2);
+      }
+      $end  = Time::HiRes::time();
+      $elapsed = $end - $start;
+      ok(0 < $elapsed && $elapsed < 10, "Cache refresh time 10sec");
+
+      done_testing;
+    };
+    system("mikasafabric manage set_ttl 1");
+
     subtest "routing should be cached during mikasafabric is down" => sub
     {
       system("mikasafabric manage stop");
+      sleep(10);
 
       my $master_ok= my $slave_ok= 0;
       foreach (1..$max_router_retry)
@@ -244,10 +280,6 @@ foreach (1..3)
 }
 
 done_testing;
-
-
-
-
 
 
 sub healthcheck
