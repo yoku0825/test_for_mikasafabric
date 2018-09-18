@@ -276,6 +276,9 @@ foreach (1..1)
       system("mikasafabric manage start --daemonize");
       done_testing;
     };
+
+    ### This shouldn't be error
+    system("mikasafabric group health myfabric");
   };
 }
 
