@@ -23,7 +23,7 @@ sub new
   {
     eval
     {
-      $conn= DBI->connect($dsn, "admin", "", { RaiseError => 1, PrintError => 0, mysql_auto_reconnect => 1 });
+      $conn= DBI->connect($dsn, "admin", "b", { RaiseError => 1, PrintError => 0, mysql_auto_reconnect => 1 });
     };
     last if !($@);
     sleep 1;
@@ -45,7 +45,7 @@ sub new
 sub healthcheck
 {
   my ($self)= @_;
-  return Ytkit::HealthCheck->new("--host=127.0.0.1", "--port=32275", "--role=fabric")->{status}->{str};
+  return Ytkit::HealthCheck->new("--host=127.0.0.1", "--port=32275", "--user=admin", "--password=b", "--role=fabric")->{status}->{str};
 }
 
 sub lookup_groups

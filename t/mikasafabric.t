@@ -10,7 +10,6 @@ use Fabric;
 use Server;
 
 use Test::More;
-use Test::More::Color qw{foreground};
 use Data::Dumper;
 use JSON;
 use Carp::Always;
@@ -21,7 +20,7 @@ my $max_router_retry= 10;
 my $router_sleep= 1;
 
 ### Run 3 times, because facing mysqlrouter's restart problem.
-foreach (1..1)
+foreach (1..3)
 {
   subtest "test round no. $_" => sub
   {
@@ -29,8 +28,9 @@ foreach (1..1)
     system("mikasafabric manage teardown");
     system("mikasafabric manage setup");
     system("mikasafabric manage start --daemonize");
-    
-    
+    system("mikasafabric user password admin --protocol=mysql");
+    system("mikasafabric user add mikasarouter --protocol=mysql --roles=connector");
+
     my $fabric= Fabric->new($group_name);
     ok($fabric, "Startup mikasafabric");
     
@@ -67,7 +67,7 @@ foreach (1..1)
     }
     
     ok(healthcheck($fabric, @servers), "mikasafabric cluster startup");
-    
+
     subtest "writing master" => sub
     {
       $master->get_conn->do("CREATE DATABASE ap");

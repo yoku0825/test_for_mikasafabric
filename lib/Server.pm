@@ -48,10 +48,10 @@ sub use_root
 {
   my ($self)= @_;
   my $dsn= sprintf("dbi:mysql:;host=%s;port=%d", $self->{host}, $self->{port});
+
+
   return DBI->connect($dsn, "root", "", { RaiseError => 1, PrintError => 0, mysql_auto_reconnect => 1 });
 }
-
-
 
 sub get_uuid
 {
@@ -64,6 +64,9 @@ sub healthcheck
   my ($self)= @_;
   return Ytkit::HealthCheck->new("--host", $self->{host},
                                  "--port", $self->{port},
+                                 "--user=root",
+                                 "--password=''",
+                                 "--uptime-enable=0",
                                  "--role=auto")->{status}->{str};
 }
 
